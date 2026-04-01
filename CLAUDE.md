@@ -37,6 +37,13 @@ Wayland layer shell backend for standard iced 0.14 (no fork). Replaces iced_wini
 - **Output-driven lifecycle**: surfaces are created/destroyed in response to `OutputEvent::Added`/`Removed`. When all monitors disconnect, a fallback surface is created.
 - **Layer changes trigger full destruction/recreation** of both the main surface and its menu overlay. Other config changes (size, position, style) use in-place updates (`set_size`, `set_anchor`, etc.).
 
+## Git Workflow
+- **Always work on a dedicated branch**, never commit directly to `main`.
+- **Branch names must match the auto-labeler patterns**: `feature/<desc>`, `fix/<desc>`, `chore/<desc>`, `docs/<desc>`.
+- **Merge to main only through PRs** — this ensures CI runs and release-drafter picks up the changes.
+- **Atomic commits**: each commit should be a single logical change that compiles and passes clippy. Don't bundle unrelated changes.
+- Before pushing, always run: `cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings`.
+
 ## Key Technical Decisions
 - **RedrawRequested**: iced 0.14 widgets (buttons, etc.) only update visual status on `Window::RedrawRequested` events. This event must be injected when a redraw is actually needed — not on every frame.
 - **Buffer scale**: Call `wl_surface.set_buffer_scale(monitor_scale)` so the compositor correctly maps surface-local coordinates to physical pixels.

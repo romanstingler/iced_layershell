@@ -1,6 +1,12 @@
 # iced_layershell
 
-Wayland [layer shell](https://wayland.app/protocols/wlr-layer-shell-unstable-v1) backend for [iced](https://github.com/iced-rs/iced) 0.14. Built to power [ashell](https://github.com/MalpenZibo/ashell), a status bar for Hyprland and Niri.
+> **Warning**: This library is not intended for general use. It is specifically built for [ashell](https://github.com/MalpenZibo/ashell) and will not accept feature requests or bug reports unrelated to ashell. If you need a general-purpose iced layer shell backend, consider [iced-layershell](https://github.com/waycrate/exwlshelleern) or the [pop-os/iced](https://github.com/pop-os/iced) fork.
+
+Wayland [layer shell](https://wayland.app/protocols/wlr-layer-shell-unstable-v1) backend for [iced](https://github.com/iced-rs/iced) 0.14. Built to power [ashell](https://github.com/MalpenZibo/ashell), a Wayland status bar.
+
+## AI-assisted development
+
+This library was developed with the assistance of AI coding agents. The architecture, implementation, code reviews, and documentation were produced through human-AI collaboration. All code has been reviewed and tested by the maintainer.
 
 ## What this is
 
@@ -18,11 +24,11 @@ This library is **tailored for ashell**. It implements exactly the features ashe
 ## Features
 
 - Layer shell surface management (create, destroy, configure anchor/layer/size/margin/exclusive zone)
-- Keyboard input with client-side repeat, pointer, touch, and scroll events
+- Keyboard input with client-side repeat and physical key mapping, pointer, touch, and scroll events
+- Full iced runtime action handling (clipboard read/write, widget focus, font loading)
 - HiDPI support with configurable application scale factor
-- Clipboard via smithay-clipboard
 - Output (monitor) tracking with connect/disconnect subscriptions
-- Persistent widget UIs with iced's `UserInterface` caching (ManuallyDrop pattern from iced_winit)
+- Persistent widget UIs with iced's `UserInterface` caching
 
 ## Usage
 
@@ -54,8 +60,5 @@ Features that ashell doesn't need are intentionally omitted:
 - Popups / xdg-popup
 - Session lock surfaces
 - Subsurfaces
-- Full `iced_runtime::Action` handling (Widget focus, clipboard read via Task, font loading via Task)
+- Window actions (minimize, maximize, resize, etc.)
 
-## License
-
-MIT -- see [LICENSE](LICENSE).
