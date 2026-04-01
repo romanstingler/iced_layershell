@@ -31,6 +31,9 @@ fn boot() -> (App, Task<Msg>) {
 fn update(app: &mut App, msg: Msg) -> Task<Msg> {
     match msg {
         Msg::OpenMenu => {
+            if app.menu_id.is_some() {
+                return Task::none(); // Already open
+            }
             let (id, task) = new_layer_surface(LayerShellSettings {
                 anchor: Anchor::all(),
                 layer: Layer::Overlay,

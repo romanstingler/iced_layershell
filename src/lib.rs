@@ -125,6 +125,7 @@ pub mod id {
     pub use iced_widget::Id;
 }
 
+#[allow(unused_imports)]
 pub mod time {
     pub use iced_futures::backend::default::time::*;
 }

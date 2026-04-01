@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::mem;
+use std::mem::{self, ManuallyDrop};
 
 use calloop::EventLoop;
 use calloop_wayland_source::WaylandSource;
@@ -123,8 +123,9 @@ struct IcedSurface {
     surface: <Compositor as iced_graphics::Compositor>::Surface,
     viewport: Viewport,
     cache: Option<user_interface::Cache>,
-    last_mouse_interaction: mouse::Interaction,
+    needs_redraw: bool,
 }
+
 
 fn run<State, Message>(app: Application<State, Message>) -> Result<(), Error>
 where
@@ -226,7 +227,7 @@ where
 
     let graphics_settings = iced_graphics::Settings {
         default_font: app.default_font,
-        default_text_size: iced_core::Pixels(16.0),
+        default_text_size: iced_core::Pixels(14.0),
         antialiasing: if app.antialiasing {
             Some(iced_graphics::Antialiasing::MSAAx4)
         } else {
@@ -249,9 +250,6 @@ where
         compositor.load_font(font_bytes.clone());
     }
 
-    // Compute initial combined scale factor (monitor DPI * app scale)
-    // We need a temporary state for the initial scale_factor call.
-    // Since boot() hasn't been called yet, we use 1.0 as default app scale.
     let initial_app_scale = 1.0f32;
     let initial_scale = main_data.scale_factor as f32 * initial_app_scale;
 
@@ -264,7 +262,7 @@ where
                 Size::new(width, height),
                 initial_scale,
             ),
-            last_mouse_interaction: mouse::Interaction::default(),
+            needs_redraw: true,
             cache: None,
         },
     );
@@ -311,6 +309,10 @@ where
 
     let mut running = true;
 
+    // Build initial persistent UIs (same ManuallyDrop pattern as iced_winit)
+    let mut user_interfaces = ManuallyDrop::new(
+        build_user_interfaces(&app.view, &user_state, &mut iced_surfaces, &mut renderer),
+    );
 
     let mut first_frame = true;
     while running {
@@ -327,10 +329,16 @@ where
             .dispatch(timeout, &mut wl_state)
             .map_err(|e| Error::EventLoop(e.to_string()))?;
 
+        // Bridge wl_state.surfaces_need_redraw → iced_s.needs_redraw
+        for id in wl_state.surfaces_need_redraw.drain() {
+            if let Some(iced_s) = iced_surfaces.get_mut(&id) {
+                iced_s.needs_redraw = true;
+            }
+        }
+
         // --- b. Handle closed surfaces ---
-        // Don't exit when MAIN is closed — ashell manages its own surface
-        // lifecycle (destroys initial surface, recreates per output).
         for closed_id in wl_state.closed_surfaces.drain(..) {
+            user_interfaces.remove(&closed_id);
             iced_surfaces.remove(&closed_id);
             if let Some(wl_surface) = wl_state.surface_id_map.remove(&closed_id) {
                 wl_state.surfaces.remove(&wl_surface);
@@ -377,15 +385,17 @@ where
                     {
                         compositor.configure_surface(&mut iced.surface, phys_w, phys_h);
                         iced.viewport = new_vp;
-                        wl_state.surfaces_need_redraw.insert(data.id);
+                        iced.needs_redraw = true;
                     }
                 }
             }
         }
 
+        // Create iced rendering surfaces for newly configured wayland surfaces
+        sync_iced_surfaces(&wl_state, &mut compositor, &mut iced_surfaces, app_scale);
+
         // --- g. Transform and group events ---
         let pending_events = mem::take(&mut wl_state.pending_events);
-        let redraw_set = mem::take(&mut wl_state.surfaces_need_redraw);
         let scale = |p: iced_core::Point| iced_core::Point::new(p.x / app_scale, p.y / app_scale);
         let mut surface_events: HashMap<SurfaceId, Vec<iced_core::Event>> = HashMap::new();
         for (sid, event) in pending_events {
@@ -413,46 +423,22 @@ where
         let mut all_messages: Vec<Message> = Vec::new();
         all_messages.extend(runtime_messages);
 
-        // ====================================================================
-        // Per-surface: build UI → update with events + RedrawRequested →
-        // compare mouse_interaction → draw only if visual state changed.
-        //
-        // Reactive rendering: mouse motion over empty space has the same
-        // mouse_interaction as before (None) → no draw. Entering/leaving
-        // a button changes it (None↔Pointer) → draw.
-        // ====================================================================
+        // ==================================================================
+        // PHASE 1: Update EXISTING UIs with user events (like iced_winit's
+        // AboutToWait). Widgets persist across frames — button.status
+        // carries over. Only mark for redraw if a widget requests it.
+        // ==================================================================
         let surface_ids: Vec<SurfaceId> = iced_surfaces.keys().copied().collect();
         for surface_id in &surface_ids {
-            let mut events = surface_events.remove(surface_id).unwrap_or_default();
-            let needs_redraw = redraw_set.contains(surface_id);
-
-            if events.is_empty() && !needs_redraw && all_messages.is_empty() {
+            let events = surface_events.remove(surface_id).unwrap_or_default();
+            if events.is_empty() && all_messages.is_empty() {
                 continue;
             }
 
-            let iced_s = match iced_surfaces.get_mut(surface_id) {
-                Some(s) => s,
+            let ui = match user_interfaces.get_mut(surface_id) {
+                Some(ui) => ui,
                 None => continue,
             };
-
-            let wl_surface = match wl_state.surface_id_map.get(surface_id) {
-                Some(wl) => wl.clone(),
-                None => continue,
-            };
-            let data = match wl_state.surfaces.get_mut(&wl_surface) {
-                Some(d) => d,
-                None => continue,
-            };
-            if !data.configured || data.size.0 == 0 || data.size.1 == 0 {
-                continue;
-            }
-
-            // Build UI (fresh from view — widget status reset to None)
-            let element = (app.view)(&user_state, *surface_id);
-            let cache = iced_s.cache.take().unwrap_or_default();
-            let mut ui = UserInterface::build(
-                element, iced_s.viewport.logical_size(), cache, &mut renderer,
-            );
 
             let cursor = if wl_state.pointer_surface == Some(*surface_id) {
                 let pos = wl_state.cursor_position;
@@ -461,68 +447,57 @@ where
                 mouse::Cursor::Unavailable
             };
 
-            // Inject RedrawRequested so widgets set their visual status
-            events.push(iced_core::Event::Window(
-                iced_core::window::Event::RedrawRequested(std::time::Instant::now()),
-            ));
-
             let (ui_state, _statuses) = ui.update(
                 &events, cursor, &mut renderer, &mut clipboard, &mut all_messages,
             );
 
-            // Extract mouse_interaction for reactive draw decision
-            let mouse_interaction = match ui_state {
-                iced_runtime::user_interface::State::Updated { mouse_interaction, .. } => {
-                    mouse_interaction
+            match ui_state {
+                iced_runtime::user_interface::State::Updated {
+                    redraw_request, mouse_interaction, ..
+                } => {
+                    wl_state.set_cursor_shape(mouse_interaction, &qh);
+                    if !matches!(redraw_request, iced_core::window::RedrawRequest::Wait) {
+                        if let Some(s) = iced_surfaces.get_mut(surface_id) {
+                            s.needs_redraw = true;
+                        }
+                    }
                 }
-                _ => mouse::Interaction::default(),
-            };
-
-            // Reactive rendering: only draw+present if visual state changed
-            // or forced (needs_redraw from messages/resize/frame_callback).
-            let interaction_changed = mouse_interaction != iced_s.last_mouse_interaction;
-            let should_draw = needs_redraw || interaction_changed;
-
-            if should_draw {
-                iced_s.last_mouse_interaction = mouse_interaction;
-
-                let style = iced_core::renderer::Style { text_color: theme.palette().text };
-                ui.draw(&mut renderer, &theme, &style, cursor);
-
-                if data.frame_pending {
-                    data.needs_rerender = true;
-                } else {
-                    let bg = theme.palette().background;
-                    let wl_surf = data.layer_surface.wl_surface();
-                    wl_surf.frame(&qh, wl_surf.clone());
-                    data.frame_pending = true;
-
-                    match compositor.present(&mut renderer, &mut iced_s.surface, &iced_s.viewport, bg, || {}) {
-                        Ok(()) => {}
-                        Err(iced_graphics::compositor::SurfaceError::OutOfMemory) => { running = false; }
-                        Err(_) => { data.frame_pending = false; }
+                iced_runtime::user_interface::State::Outdated => {
+                    if let Some(s) = iced_surfaces.get_mut(surface_id) {
+                        s.needs_redraw = true;
                     }
                 }
             }
-
-            iced_s.cache = Some(ui.into_cache());
-
-            // Update cursor shape
-            wl_state.set_cursor_shape(mouse_interaction, &qh);
         }
 
-        // --- h. Process messages ---
+        // ==================================================================
+        // Process messages: drop UIs → mutate state → rebuild UIs
+        // ==================================================================
         let mut pending_creations: Vec<(SurfaceId, LayerShellSettings)> = Vec::new();
-        let had_messages = !all_messages.is_empty();
-        for message in all_messages {
-            let task = (app.update)(&mut user_state, message);
-            process_task(task, &mut wl_state, &mut runtime, &mut pending_creations, &qh);
-        }
+        if !all_messages.is_empty() {
+            // Drop all UIs before mutating state (same as iced_winit)
+            let caches: HashMap<SurfaceId, user_interface::Cache> =
+                ManuallyDrop::into_inner(user_interfaces)
+                    .into_iter()
+                    .map(|(id, ui)| (id, ui.into_cache()))
+                    .collect();
 
-        if had_messages {
-            for id in iced_surfaces.keys() {
-                wl_state.surfaces_need_redraw.insert(*id);
+            for message in all_messages {
+                let task = (app.update)(&mut user_state, message);
+                process_task(task, &mut wl_state, &mut runtime, &mut pending_creations, &qh);
             }
+
+            // Restore caches into iced_surfaces for rebuild
+            for (id, cache) in caches {
+                if let Some(iced_s) = iced_surfaces.get_mut(&id) {
+                    iced_s.cache = Some(cache);
+                }
+            }
+
+            // Rebuild all UIs with new state
+            user_interfaces = ManuallyDrop::new(
+                build_user_interfaces(&app.view, &user_state, &mut iced_surfaces, &mut renderer),
+            );
         }
 
         // Clipboard writes
@@ -534,15 +509,120 @@ where
         for (id, settings) in pending_creations.drain(..) {
             let layer = create_layer_surface(&wl_state.compositor, &wl_state.layer_shell, &qh, &settings, &wl_state);
             wl_state.register_surface(id, layer);
-            wl_state.surfaces_need_redraw.insert(id);
         }
         sync_iced_surfaces(&wl_state, &mut compositor, &mut iced_surfaces, app_scale);
+
+        // Build UIs for newly created surfaces
+        {
+            let new_ids: Vec<SurfaceId> = iced_surfaces.keys()
+                .filter(|id| !user_interfaces.contains_key(id))
+                .copied().collect();
+            for id in new_ids {
+                let iced_s = iced_surfaces.get_mut(&id).unwrap();
+                let cache = iced_s.cache.take().unwrap_or_default();
+                iced_s.needs_redraw = true;
+                let element = (app.view)(&user_state, id);
+                let ui = UserInterface::build(element, iced_s.viewport.logical_size(), cache, &mut renderer);
+                user_interfaces.insert(id, ui);
+            }
+        }
+
+        // ==================================================================
+        // PHASE 2: Draw + present surfaces that need redraw (like iced_winit's
+        // RedrawRequested). Send RedrawRequested so widgets commit visual
+        // status, then draw and present.
+        // ==================================================================
+        // Re-collect surface_ids to include surfaces created during message processing
+        let surface_ids: Vec<SurfaceId> = iced_surfaces.keys().copied().collect();
+        for surface_id in &surface_ids {
+            let iced_s = match iced_surfaces.get_mut(surface_id) {
+                Some(s) if s.needs_redraw => { s.needs_redraw = false; s }
+                _ => continue,
+            };
+
+            let wl_surface = match wl_state.surface_id_map.get(surface_id) {
+                Some(wl) => wl.clone(),
+                None => continue,
+            };
+            let data = match wl_state.surfaces.get_mut(&wl_surface) {
+                Some(d) if d.configured && d.size.0 > 0 && d.size.1 > 0 => d,
+                _ => continue,
+            };
+
+            let ui = match user_interfaces.get_mut(surface_id) {
+                Some(ui) => ui,
+                None => continue,
+            };
+
+            let cursor = if wl_state.pointer_surface == Some(*surface_id) {
+                let pos = wl_state.cursor_position;
+                mouse::Cursor::Available(iced_core::Point::new(pos.x / app_scale, pos.y / app_scale))
+            } else {
+                mouse::Cursor::Unavailable
+            };
+
+            // Inject RedrawRequested — widgets commit visual status on this
+            let redraw_event = [iced_core::Event::Window(
+                iced_core::window::Event::RedrawRequested(std::time::Instant::now()),
+            )];
+            let mut discard = Vec::new();
+            ui.update(&redraw_event, cursor, &mut renderer, &mut clipboard, &mut discard);
+
+            // Draw
+            let style = iced_core::renderer::Style { text_color: theme.palette().text };
+            ui.draw(&mut renderer, &theme, &style, cursor);
+
+            // Present
+            if data.frame_pending {
+                data.needs_rerender = true;
+            } else {
+                let bg = iced_core::Color::TRANSPARENT;
+                let wl_surf = data.layer_surface.wl_surface();
+                wl_surf.frame(&qh, wl_surf.clone());
+                data.frame_pending = true;
+
+                match compositor.present(&mut renderer, &mut iced_s.surface, &iced_s.viewport, bg, || {}) {
+                    Ok(()) => {}
+                    Err(iced_graphics::compositor::SurfaceError::OutOfMemory) => { running = false; }
+                    Err(_) => { data.frame_pending = false; }
+                }
+            }
+        }
+
+        // Handle needs_rerender from frame callbacks
+        for (_wl, data) in &wl_state.surfaces {
+            if data.needs_rerender {
+                if let Some(s) = iced_surfaces.get_mut(&data.id) {
+                    s.needs_redraw = true;
+                }
+            }
+        }
     }
 
     Ok(())
 }
 
 /// Split our Task into layer shell commands, iced tasks, and surface creations.
+/// Build a UserInterface for each surface, like iced_winit's build_user_interfaces.
+fn build_user_interfaces<'a, State, Message: 'a>(
+    view: &dyn for<'v> Fn(&'v State, SurfaceId) -> iced_core::Element<'v, Message, Theme, iced_renderer::Renderer>,
+    user_state: &'a State,
+    iced_surfaces: &mut HashMap<SurfaceId, IcedSurface>,
+    renderer: &mut iced_renderer::Renderer,
+) -> HashMap<SurfaceId, UserInterface<'a, Message, Theme, iced_renderer::Renderer>> {
+    let mut uis = HashMap::new();
+    let ids: Vec<SurfaceId> = iced_surfaces.keys().copied().collect();
+    for id in ids {
+        let iced_s = iced_surfaces.get_mut(&id).unwrap();
+        let cache = iced_s.cache.take().unwrap_or_default();
+        iced_s.needs_redraw = true;
+        let element = view(user_state, id);
+        let ui = UserInterface::build(element, iced_s.viewport.logical_size(), cache, renderer);
+        uis.insert(id, ui);
+    }
+    uis
+}
+
 fn process_task<M: Send + Clone + 'static>(
     task: Task<M>,
     wl_state: &mut WaylandState,
@@ -705,6 +785,16 @@ fn create_layer_surface(
         }
     }
 
+    // Set buffer scale for HiDPI — matches the target output or first available
+    let scale = wl_output.as_ref()
+        .and_then(|wo| wl_state.outputs.get(wo))
+        .map(|info| info.scale_factor)
+        .or_else(|| wl_state.outputs.values().next().map(|info| info.scale_factor))
+        .unwrap_or(1);
+    if scale > 1 {
+        layer_surface.wl_surface().set_buffer_scale(scale);
+    }
+
     layer_surface.commit();
     layer_surface
 }
@@ -720,14 +810,16 @@ fn sync_iced_surfaces(
         if iced_surfaces.contains_key(&data.id) {
             continue;
         }
+        // Only create wgpu surface after configure (need real dimensions)
+        if !data.configured || data.size.0 == 0 || data.size.1 == 0 {
+            continue;
+        }
         if let Some(window) = WaylandWindow::new(wl_state.display_ptr, wl_surface) {
             let monitor_scale = data.scale_factor as u32;
-            let (w, h) = if data.size.0 > 0 && data.size.1 > 0 {
-                (data.size.0 * monitor_scale.max(1),
-                 data.size.1 * monitor_scale.max(1))
-            } else {
-                (1, 1)
-            };
+            let (w, h) = (
+                data.size.0 * monitor_scale.max(1),
+                data.size.1 * monitor_scale.max(1),
+            );
             let combined_scale = data.scale_factor as f32 * app_scale;
             iced_surfaces.insert(
                 data.id,
@@ -738,7 +830,7 @@ fn sync_iced_surfaces(
                         combined_scale,
                     ),
                     cache: None,
-                    last_mouse_interaction: mouse::Interaction::default(),
+                    needs_redraw: true,
                 },
             );
         }

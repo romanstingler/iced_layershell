@@ -639,9 +639,21 @@ impl PointerHandler for WaylandState {
                     vertical,
                     ..
                 } => {
-                    let delta = iced_core::mouse::ScrollDelta::Lines {
-                        x: horizontal.absolute as f32,
-                        y: vertical.absolute as f32,
+                    let delta = if horizontal.value120 != 0 || vertical.value120 != 0 {
+                        iced_core::mouse::ScrollDelta::Lines {
+                            x: -horizontal.value120 as f32 / 120.0,
+                            y: -vertical.value120 as f32 / 120.0,
+                        }
+                    } else if horizontal.discrete != 0 || vertical.discrete != 0 {
+                        iced_core::mouse::ScrollDelta::Lines {
+                            x: -horizontal.discrete as f32,
+                            y: -vertical.discrete as f32,
+                        }
+                    } else {
+                        iced_core::mouse::ScrollDelta::Pixels {
+                            x: -horizontal.absolute as f32,
+                            y: -vertical.absolute as f32,
+                        }
                     };
                     self.pending_events.push((
                         surface_id,
