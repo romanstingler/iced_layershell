@@ -168,3 +168,127 @@ pub fn set_size<M>(id: SurfaceId, size: (u32, u32)) -> Task<M> {
 pub fn set_margin<M>(id: SurfaceId, margin: (i32, i32, i32, i32)) -> Task<M> {
     Task::LayerShell(LayerShellCommand::SetMargin(id, margin))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- Task::batch ---
+
+    #[test]
+    fn batch_empty_is_none() {
+        let task: Task<()> = Task::batch(vec![]);
+        assert!(matches!(task, Task::Iced(_)));
+    }
+
+    #[test]
+    fn batch_single_unwraps() {
+        let id = SurfaceId::new(1);
+        let task: Task<()> = Task::batch(vec![destroy_layer_surface(id)]);
+        assert!(matches!(
+            task,
+            Task::LayerShell(LayerShellCommand::DestroySurface(_))
+        ));
+    }
+
+    #[test]
+    fn batch_multiple_creates_batch() {
+        let id = SurfaceId::new(1);
+        let task: Task<()> =
+            Task::batch(vec![destroy_layer_surface(id), set_layer(id, Layer::Top)]);
+        assert!(matches!(task, Task::Batch(v) if v.len() == 2));
+    }
+
+    // --- Task::map ---
+
+    #[test]
+    fn map_layer_shell_passes_through() {
+        let id = SurfaceId::new(1);
+        let task: Task<i32> = destroy_layer_surface(id);
+        let mapped: Task<String> = task.map(|n: i32| n.to_string());
+        assert!(matches!(
+            mapped,
+            Task::LayerShell(LayerShellCommand::DestroySurface(_))
+        ));
+    }
+
+    // --- Task::chain ---
+
+    #[test]
+    fn chain_mixed_creates_batch() {
+        let id = SurfaceId::new(1);
+        let a: Task<()> = Task::none();
+        let b: Task<()> = destroy_layer_surface(id);
+        let chained = a.chain(b);
+        assert!(matches!(chained, Task::Batch(v) if v.len() == 2));
+    }
+
+    // --- Task::discard ---
+
+    #[test]
+    fn discard_layer_shell_passes_through() {
+        let id = SurfaceId::new(1);
+        let task: Task<i32> = set_exclusive_zone(id, 40);
+        let discarded: Task<String> = task.discard();
+        assert!(matches!(
+            discarded,
+            Task::LayerShell(LayerShellCommand::SetExclusiveZone(_, 40))
+        ));
+    }
+
+    // --- Task::from ---
+
+    #[test]
+    fn from_iced_task() {
+        let task: Task<()> = Task::from(iced_runtime::Task::none());
+        assert!(matches!(task, Task::Iced(_)));
+    }
+
+    // --- Free functions ---
+
+    #[test]
+    fn new_layer_surface_returns_unique_id() {
+        let (id1, _): (SurfaceId, Task<()>) = new_layer_surface(LayerShellSettings::default());
+        let (id2, _): (SurfaceId, Task<()>) = new_layer_surface(LayerShellSettings::default());
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn destroy_layer_surface_creates_correct_command() {
+        let id = SurfaceId::new(42);
+        let task: Task<()> = destroy_layer_surface(id);
+        assert!(
+            matches!(task, Task::LayerShell(LayerShellCommand::DestroySurface(sid)) if sid == id)
+        );
+    }
+
+    #[test]
+    fn set_anchor_creates_correct_command() {
+        let id = SurfaceId::new(1);
+        let anchor = Anchor::TOP | Anchor::LEFT;
+        let task: Task<()> = set_anchor(id, anchor);
+        assert!(
+            matches!(task, Task::LayerShell(LayerShellCommand::SetAnchor(_, a)) if a == anchor)
+        );
+    }
+
+    #[test]
+    fn set_size_creates_correct_command() {
+        let id = SurfaceId::new(1);
+        let task: Task<()> = set_size(id, (800, 600));
+        assert!(matches!(
+            task,
+            Task::LayerShell(LayerShellCommand::SetSize(_, (800, 600)))
+        ));
+    }
+
+    #[test]
+    fn set_margin_creates_correct_command() {
+        let id = SurfaceId::new(1);
+        let task: Task<()> = set_margin(id, (10, 20, 30, 40));
+        assert!(matches!(
+            task,
+            Task::LayerShell(LayerShellCommand::SetMargin(_, (10, 20, 30, 40)))
+        ));
+    }
+}
