@@ -1,0 +1,56 @@
+[package]
+name = "iced_wayland_layer"
+version = "0.1.0"
+edition = "2024"
+description = "Wayland layer shell backend for iced"
+license = "MIT"
+
+[dependencies]
+# Iced 0.14 sub-crates (NOT the top-level iced crate)
+iced_core = "0.14"
+iced_runtime = "0.14"
+iced_renderer = { version = "0.14", default-features = false }
+iced_widget = "0.14"
+iced_graphics = "0.14"
+iced_futures = "0.14"
+
+# Wayland
+smithay-client-toolkit = { version = "0.20", default-features = false, features = [
+    "calloop",
+    "xkbcommon",
+] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+wayland-backend = { version = "0.3", features = ["client_system"] }
+
+# Event loop
+calloop = "0.14"
+calloop-wayland-source = "0.4"
+
+# Surface bridging
+raw-window-handle = "0.6"
+
+# Clipboard
+smithay-clipboard = { version = "0.7", default-features = false }
+
+# Utilities
+thiserror = "2"
+log = "0.4"
+futures = "0.3"
+
+[features]
+default = ["wgpu"]
+wgpu = ["iced_renderer/wgpu", "iced_renderer/wgpu-bare"]
+tiny-skia = ["iced_renderer/tiny-skia"]
+svg = ["iced_renderer/svg"]
+image = ["iced_renderer/image"]
+geometry = ["iced_renderer/geometry"]
+tokio = ["iced_futures/tokio"]
+
+[[example]]
+name = "bar_with_menu"
+path = "examples/bar_with_menu.rs"
+
+[[example]]
+name = "simple_bar"
+path = "examples/simple_bar.rs"
