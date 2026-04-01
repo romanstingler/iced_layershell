@@ -283,3 +283,353 @@ pub(crate) fn scancode_to_physical(scancode: u32) -> keyboard::key::Physical {
         _ => return Physical::Unidentified(NativeCode::Xkb(scancode)),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iced_core::keyboard::Key;
+    use iced_core::keyboard::key::Named;
+
+    #[test]
+    fn modifiers_empty() {
+        let mods = Modifiers {
+            ctrl: false,
+            alt: false,
+            shift: false,
+            caps_lock: false,
+            logo: false,
+            num_lock: false,
+        };
+        assert_eq!(modifiers_to_iced(mods), keyboard::Modifiers::empty());
+    }
+
+    #[test]
+    fn modifiers_individual_flags() {
+        assert!(
+            modifiers_to_iced(Modifiers {
+                shift: true,
+                ..Default::default()
+            })
+            .contains(keyboard::Modifiers::SHIFT)
+        );
+        assert!(
+            modifiers_to_iced(Modifiers {
+                ctrl: true,
+                ..Default::default()
+            })
+            .contains(keyboard::Modifiers::CTRL)
+        );
+        assert!(
+            modifiers_to_iced(Modifiers {
+                alt: true,
+                ..Default::default()
+            })
+            .contains(keyboard::Modifiers::ALT)
+        );
+        assert!(
+            modifiers_to_iced(Modifiers {
+                logo: true,
+                ..Default::default()
+            })
+            .contains(keyboard::Modifiers::LOGO)
+        );
+    }
+
+    #[test]
+    fn modifiers_all_flags() {
+        let result = modifiers_to_iced(Modifiers {
+            shift: true,
+            ctrl: true,
+            alt: true,
+            logo: true,
+            caps_lock: true,
+            num_lock: true,
+        });
+        assert!(result.contains(keyboard::Modifiers::SHIFT));
+        assert!(result.contains(keyboard::Modifiers::CTRL));
+        assert!(result.contains(keyboard::Modifiers::ALT));
+        assert!(result.contains(keyboard::Modifiers::LOGO));
+    }
+
+    #[test]
+    fn pointer_buttons_standard() {
+        assert_eq!(pointer_button_to_iced(0x110), mouse::Button::Left);
+        assert_eq!(pointer_button_to_iced(0x111), mouse::Button::Right);
+        assert_eq!(pointer_button_to_iced(0x112), mouse::Button::Middle);
+    }
+
+    #[test]
+    fn pointer_buttons_other() {
+        assert_eq!(pointer_button_to_iced(0x113), mouse::Button::Other(0x113));
+        assert_eq!(pointer_button_to_iced(0), mouse::Button::Other(0));
+    }
+
+    #[test]
+    fn keysym_named_keys() {
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0xff08)),
+            Key::Named(Named::Backspace)
+        );
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0xff09)),
+            Key::Named(Named::Tab)
+        );
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0xff0d)),
+            Key::Named(Named::Enter)
+        );
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0xff1b)),
+            Key::Named(Named::Escape)
+        );
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0xffff)),
+            Key::Named(Named::Delete)
+        );
+    }
+
+    #[test]
+    fn keysym_arrow_keys() {
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0xff51)),
+            Key::Named(Named::ArrowLeft)
+        );
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0xff52)),
+            Key::Named(Named::ArrowUp)
+        );
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0xff53)),
+            Key::Named(Named::ArrowRight)
+        );
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0xff54)),
+            Key::Named(Named::ArrowDown)
+        );
+    }
+
+    #[test]
+    fn keysym_function_keys() {
+        let expected = [
+            Named::F1,
+            Named::F2,
+            Named::F3,
+            Named::F4,
+            Named::F5,
+            Named::F6,
+            Named::F7,
+            Named::F8,
+            Named::F9,
+            Named::F10,
+            Named::F11,
+            Named::F12,
+        ];
+        for (i, keysym) in (0xffbe..=0xffc9).enumerate() {
+            assert_eq!(
+                keysym_to_iced_key(Keysym::new(keysym)),
+                Key::Named(expected[i])
+            );
+        }
+    }
+
+    #[test]
+    fn keysym_modifier_keys() {
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0xffe1)),
+            Key::Named(Named::Shift)
+        );
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0xffe2)),
+            Key::Named(Named::Shift)
+        );
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0xffe3)),
+            Key::Named(Named::Control)
+        );
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0xffe9)),
+            Key::Named(Named::Alt)
+        );
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0xffe7)),
+            Key::Named(Named::Super)
+        );
+    }
+
+    #[test]
+    fn keysym_media_keys() {
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0x1008ff11)),
+            Key::Named(Named::AudioVolumeDown)
+        );
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0x1008ff12)),
+            Key::Named(Named::AudioVolumeMute)
+        );
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0x1008ff13)),
+            Key::Named(Named::AudioVolumeUp)
+        );
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0x1008ff14)),
+            Key::Named(Named::MediaPlayPause)
+        );
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0x1008ff17)),
+            Key::Named(Named::MediaTrackNext)
+        );
+    }
+
+    #[test]
+    fn keysym_ascii_characters() {
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0x0020)),
+            Key::Named(Named::Space)
+        );
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0x0061)),
+            Key::Character("a".into())
+        );
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0x007a)),
+            Key::Character("z".into())
+        );
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0x0041)),
+            Key::Character("A".into())
+        );
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0x0031)),
+            Key::Character("1".into())
+        );
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0x007e)),
+            Key::Character("~".into())
+        );
+    }
+
+    #[test]
+    fn keysym_unicode() {
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0x010000e9)),
+            Key::Character("é".into())
+        );
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0x0101f389)),
+            Key::Character("\u{1f389}".into())
+        );
+    }
+
+    #[test]
+    fn keysym_latin1_supplement() {
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0xf1)),
+            Key::Character("ñ".into())
+        );
+        assert_eq!(
+            keysym_to_iced_key(Keysym::new(0xfc)),
+            Key::Character("ü".into())
+        );
+    }
+
+    #[test]
+    fn keysym_unidentified() {
+        assert_eq!(keysym_to_iced_key(Keysym::new(0x00)), Key::Unidentified);
+        assert_eq!(keysym_to_iced_key(Keysym::new(0x01)), Key::Unidentified);
+        assert_eq!(keysym_to_iced_key(Keysym::new(0x7f)), Key::Unidentified);
+    }
+
+    #[test]
+    fn key_utf8_text_valid() {
+        assert_eq!(key_utf8_to_text(Some("hello")), Some("hello".into()));
+        assert_eq!(key_utf8_to_text(Some(" ")), Some(" ".into()));
+    }
+
+    #[test]
+    fn key_utf8_text_filtered() {
+        assert_eq!(key_utf8_to_text(None), None);
+        assert_eq!(key_utf8_to_text(Some("")), None);
+        assert_eq!(key_utf8_to_text(Some("\n")), None);
+        assert_eq!(key_utf8_to_text(Some("\x00")), None);
+        assert_eq!(key_utf8_to_text(Some("hello\nworld")), None);
+    }
+
+    #[test]
+    fn scancode_letter_keys() {
+        use keyboard::key::Code;
+        assert_eq!(
+            scancode_to_physical(30),
+            keyboard::key::Physical::Code(Code::KeyA)
+        );
+        assert_eq!(
+            scancode_to_physical(44),
+            keyboard::key::Physical::Code(Code::KeyZ)
+        );
+        assert_eq!(
+            scancode_to_physical(16),
+            keyboard::key::Physical::Code(Code::KeyQ)
+        );
+    }
+
+    #[test]
+    fn scancode_special_keys() {
+        use keyboard::key::Code;
+        assert_eq!(
+            scancode_to_physical(1),
+            keyboard::key::Physical::Code(Code::Escape)
+        );
+        assert_eq!(
+            scancode_to_physical(28),
+            keyboard::key::Physical::Code(Code::Enter)
+        );
+        assert_eq!(
+            scancode_to_physical(57),
+            keyboard::key::Physical::Code(Code::Space)
+        );
+        assert_eq!(
+            scancode_to_physical(14),
+            keyboard::key::Physical::Code(Code::Backspace)
+        );
+        assert_eq!(
+            scancode_to_physical(111),
+            keyboard::key::Physical::Code(Code::Delete)
+        );
+    }
+
+    #[test]
+    fn scancode_arrows() {
+        use keyboard::key::Code;
+        assert_eq!(
+            scancode_to_physical(103),
+            keyboard::key::Physical::Code(Code::ArrowUp)
+        );
+        assert_eq!(
+            scancode_to_physical(108),
+            keyboard::key::Physical::Code(Code::ArrowDown)
+        );
+        assert_eq!(
+            scancode_to_physical(105),
+            keyboard::key::Physical::Code(Code::ArrowLeft)
+        );
+        assert_eq!(
+            scancode_to_physical(106),
+            keyboard::key::Physical::Code(Code::ArrowRight)
+        );
+    }
+
+    #[test]
+    fn scancode_unknown_is_unidentified() {
+        assert!(matches!(
+            scancode_to_physical(0),
+            keyboard::key::Physical::Unidentified(_)
+        ));
+        assert!(matches!(
+            scancode_to_physical(999),
+            keyboard::key::Physical::Unidentified(_)
+        ));
+        assert!(matches!(
+            scancode_to_physical(u32::MAX),
+            keyboard::key::Physical::Unidentified(_)
+        ));
+    }
+}

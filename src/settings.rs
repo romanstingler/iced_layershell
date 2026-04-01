@@ -178,3 +178,111 @@ impl Default for LayerShellSettings {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn surface_id_main_is_zero() {
+        assert_eq!(SurfaceId::MAIN, SurfaceId::new(0));
+    }
+
+    #[test]
+    fn surface_id_unique_increments() {
+        let a = SurfaceId::unique();
+        let b = SurfaceId::unique();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn surface_id_display() {
+        assert_eq!(format!("{}", SurfaceId::new(42)), "SurfaceId(42)");
+    }
+
+    #[test]
+    fn surface_id_equality_and_hash() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(SurfaceId::new(1));
+        set.insert(SurfaceId::new(1));
+        assert_eq!(set.len(), 1);
+        set.insert(SurfaceId::new(2));
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn anchor_bit_values() {
+        assert_eq!(Anchor::NONE, Anchor(0));
+        assert_eq!(Anchor::TOP, Anchor(1));
+        assert_eq!(Anchor::BOTTOM, Anchor(2));
+        assert_eq!(Anchor::LEFT, Anchor(4));
+        assert_eq!(Anchor::RIGHT, Anchor(8));
+    }
+
+    #[test]
+    fn anchor_all_contains_every_edge() {
+        let all = Anchor::all();
+        assert!(all.contains(Anchor::TOP));
+        assert!(all.contains(Anchor::BOTTOM));
+        assert!(all.contains(Anchor::LEFT));
+        assert!(all.contains(Anchor::RIGHT));
+        assert_eq!(
+            all,
+            Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT
+        );
+    }
+
+    #[test]
+    fn anchor_contains_subset() {
+        let tb = Anchor::TOP | Anchor::BOTTOM;
+        assert!(tb.contains(Anchor::TOP));
+        assert!(tb.contains(Anchor::BOTTOM));
+        assert!(!tb.contains(Anchor::LEFT));
+        assert!(tb.contains(Anchor::NONE));
+    }
+
+    #[test]
+    fn anchor_default_is_none() {
+        assert_eq!(Anchor::default(), Anchor::NONE);
+    }
+
+    #[test]
+    fn layer_default_is_top() {
+        assert_eq!(Layer::default(), Layer::Top);
+    }
+
+    #[test]
+    fn layer_variants_distinct() {
+        assert_ne!(Layer::Background, Layer::Bottom);
+        assert_ne!(Layer::Bottom, Layer::Top);
+        assert_ne!(Layer::Top, Layer::Overlay);
+    }
+
+    #[test]
+    fn keyboard_interactivity_default_is_none() {
+        assert_eq!(
+            KeyboardInteractivity::default(),
+            KeyboardInteractivity::None
+        );
+    }
+
+    #[test]
+    fn output_id_display() {
+        assert_eq!(format!("{}", OutputId(0)), "OutputId(0)");
+        assert_eq!(format!("{}", OutputId(42)), "OutputId(42)");
+    }
+
+    #[test]
+    fn layer_shell_settings_default() {
+        let s = LayerShellSettings::default();
+        assert_eq!(s.anchor, Anchor::NONE);
+        assert_eq!(s.layer, Layer::Top);
+        assert_eq!(s.exclusive_zone, 0);
+        assert_eq!(s.keyboard_interactivity, KeyboardInteractivity::None);
+        assert_eq!(s.size, None);
+        assert_eq!(s.margin, (0, 0, 0, 0));
+        assert_eq!(s.namespace, "iced_layer");
+        assert!(s.output.is_none());
+    }
+}
