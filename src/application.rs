@@ -342,9 +342,9 @@ where
 
     let (mut user_state, boot_task) = runtime.enter(|| (app.boot)());
 
-    // Process boot task
+    // Process boot task (no UIs exist yet, so sync actions are discarded)
     let mut pending_creations: Vec<(SurfaceId, LayerShellSettings)> = Vec::new();
-    process_task(
+    let _ = process_task(
         boot_task,
         &mut wl_state,
         &mut runtime,
@@ -605,9 +605,10 @@ where
                     .map(|(id, ui)| (id, ui.into_cache()))
                     .collect();
 
+            let mut sync_actions = Vec::new();
             for message in all_messages.drain(..) {
                 let task = runtime.enter(|| (app.update)(&mut user_state, message));
-                process_task(
+                sync_actions.extend(process_task(
                     task,
                     &mut wl_state,
                     &mut runtime,
@@ -615,7 +616,7 @@ where
                     &qh,
                     &exit_flag,
                     &ping,
-                );
+                ));
             }
 
             // Restore caches into iced_surfaces for rebuild
@@ -632,6 +633,22 @@ where
                 &mut iced_surfaces,
                 &mut renderer,
             ));
+
+            // Process synchronous actions (widget ops, clipboard, etc.)
+            // after UIs are rebuilt, matching iced_winit's pattern.
+            for action in sync_actions {
+                run_action(
+                    action,
+                    &mut runtime_messages,
+                    &mut clipboard,
+                    &mut user_interfaces,
+                    &mut renderer,
+                    &mut compositor,
+                    &mut iced_surfaces,
+                    &exit_flag,
+                    &ping,
+                );
+            }
         }
 
         // Create newly requested surfaces
@@ -859,6 +876,10 @@ fn run_action<Message: std::fmt::Debug>(
 
 /// Route a [`Task`] to the appropriate handler: layer shell commands go to
 /// [`apply_layer_shell_command`], iced tasks are spawned on the async runtime.
+///
+/// Immediately-ready actions (widget operations, clipboard, etc.) are polled
+/// synchronously and returned to the caller for processing — matching
+/// `iced_winit`'s behaviour. Only the async remainder is handed to `runtime.run()`.
 fn process_task<M: Send + Clone + 'static>(
     task: Task<M>,
     wl_state: &mut WaylandState,
@@ -871,33 +892,59 @@ fn process_task<M: Send + Clone + 'static>(
     qh: &wayland_client::QueueHandle<WaylandState>,
     exit_flag: &Arc<AtomicBool>,
     ping: &calloop::ping::Ping,
-) {
+) -> Vec<Action<M>> {
+    let mut actions = Vec::new();
     match task {
         Task::LayerShell(cmd) => {
             apply_layer_shell_command(cmd, wl_state, pending_creations, qh);
         }
         Task::Iced(iced_task) => {
-            if let Some(stream) = iced_runtime::task::into_stream(iced_task) {
-                // Stream yields Action<M> — forward all to the main loop via runtime.
-                // Intercept Exit to set the flag immediately (ping wakes calloop).
-                let exit_flag = exit_flag.clone();
-                let ping = ping.clone();
-                let stream = stream.map(move |action| {
-                    if matches!(&action, Action::Exit) {
-                        exit_flag.store(true, Ordering::Relaxed);
-                        ping.ping();
+            if let Some(mut stream) = iced_runtime::task::into_stream(iced_task) {
+                let waker = std::task::Waker::noop();
+                let mut cx = Context::from_waker(waker);
+
+                loop {
+                    match runtime.enter(|| stream.poll_next_unpin(&mut cx)) {
+                        Poll::Ready(Some(action)) => {
+                            if matches!(&action, Action::Exit) {
+                                exit_flag.store(true, Ordering::Relaxed);
+                                ping.ping();
+                            }
+                            actions.push(action);
+                        }
+                        Poll::Ready(None) => break,
+                        Poll::Pending => {
+                            let exit_flag = exit_flag.clone();
+                            let ping = ping.clone();
+                            let stream = stream.map(move |action| {
+                                if matches!(&action, Action::Exit) {
+                                    exit_flag.store(true, Ordering::Relaxed);
+                                    ping.ping();
+                                }
+                                action
+                            });
+                            runtime.run(Box::pin(stream));
+                            break;
+                        }
                     }
-                    action
-                });
-                runtime.run(Box::pin(stream));
+                }
             }
         }
         Task::Batch(tasks) => {
             for t in tasks {
-                process_task(t, wl_state, runtime, pending_creations, qh, exit_flag, ping);
+                actions.extend(process_task(
+                    t,
+                    wl_state,
+                    runtime,
+                    pending_creations,
+                    qh,
+                    exit_flag,
+                    ping,
+                ));
             }
         }
     }
+    actions
 }
 
 /// Apply a synchronous layer shell command (surface create/destroy, property changes).
