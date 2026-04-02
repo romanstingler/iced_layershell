@@ -549,15 +549,7 @@ where
                 continue;
             };
 
-            let cursor = if wl_state.pointer_surface == Some(*surface_id) {
-                let pos = wl_state.cursor_position;
-                mouse::Cursor::Available(iced_core::Point::new(
-                    pos.x / app_scale,
-                    pos.y / app_scale,
-                ))
-            } else {
-                mouse::Cursor::Unavailable
-            };
+            let cursor = scaled_cursor(&wl_state, *surface_id, app_scale);
 
             let (ui_state, statuses) = ui.update(
                 &events,
@@ -567,7 +559,7 @@ where
                 &mut all_messages,
             );
 
-            for (event, status) in events.iter().zip(statuses.into_iter()) {
+            for (event, status) in events.iter().zip(statuses) {
                 runtime.broadcast(iced_futures::subscription::Event::Interaction {
                     window: (*surface_id).into(),
                     event: event.clone(),
@@ -695,6 +687,8 @@ where
                 _ => continue,
             };
 
+            let cursor = scaled_cursor(&wl_state, *surface_id, app_scale);
+
             let wl_surface = match wl_state.surface_id_map.get(surface_id) {
                 Some(wl) => wl.clone(),
                 None => continue,
@@ -706,16 +700,6 @@ where
 
             let Some(ui) = user_interfaces.get_mut(surface_id) else {
                 continue;
-            };
-
-            let cursor = if wl_state.pointer_surface == Some(*surface_id) {
-                let pos = wl_state.cursor_position;
-                mouse::Cursor::Available(iced_core::Point::new(
-                    pos.x / app_scale,
-                    pos.y / app_scale,
-                ))
-            } else {
-                mouse::Cursor::Unavailable
             };
 
             // RedrawRequested makes widgets commit their visual status
@@ -1091,6 +1075,16 @@ fn create_layer_surface(
 
     layer_surface.commit();
     layer_surface
+}
+
+/// Create a scaled cursor for the given surface.
+fn scaled_cursor(wl_state: &WaylandState, surface_id: SurfaceId, app_scale: f32) -> mouse::Cursor {
+    if wl_state.pointer_surface == Some(surface_id) {
+        let pos = wl_state.cursor_position;
+        mouse::Cursor::Available(iced_core::Point::new(pos.x / app_scale, pos.y / app_scale))
+    } else {
+        mouse::Cursor::Unavailable
+    }
 }
 
 /// Ensure every registered wayland surface has a corresponding iced rendering surface.
