@@ -24,6 +24,14 @@ impl SurfaceId {
     }
 }
 
+impl From<SurfaceId> for iced_core::window::Id {
+    fn from(id: SurfaceId) -> Self {
+        // SAFETY: Both SurfaceId and iced_core::window::Id are newtype wrappers
+        // around u64 with no other fields, so transmute is safe.
+        unsafe { std::mem::transmute(id.0) }
+    }
+}
+
 impl fmt::Display for SurfaceId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "SurfaceId({})", self.0)
