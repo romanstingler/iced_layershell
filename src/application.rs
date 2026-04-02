@@ -559,13 +559,21 @@ where
                 mouse::Cursor::Unavailable
             };
 
-            let (ui_state, _statuses) = ui.update(
+            let (ui_state, statuses) = ui.update(
                 &events,
                 cursor,
                 &mut renderer,
                 &mut clipboard,
                 &mut all_messages,
             );
+
+            for (event, status) in events.iter().zip(statuses.into_iter()) {
+                runtime.broadcast(iced_futures::subscription::Event::Interaction {
+                    window: (*surface_id).into(),
+                    event: event.clone(),
+                    status,
+                });
+            }
 
             match ui_state {
                 iced_runtime::user_interface::State::Updated {
