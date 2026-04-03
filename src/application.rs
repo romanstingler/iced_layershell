@@ -279,8 +279,8 @@ where
     let (width, height) = if main_data.size.0 > 0 && main_data.size.1 > 0 {
         // Convert surface-local to physical pixels
         (
-            main_data.size.0 * monitor_scale.max(1),
-            main_data.size.1 * monitor_scale.max(1),
+            main_data.size.0 * monitor_scale,
+            main_data.size.1 * monitor_scale,
         )
     } else {
         (800, 30)
