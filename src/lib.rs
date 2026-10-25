@@ -9,6 +9,7 @@ pub(crate) mod event_loop;
 pub(crate) mod handlers;
 pub(crate) mod output_subscription;
 mod settings;
+mod shell;
 mod state;
 pub(crate) mod surface_manager;
 pub(crate) mod ui_builder;

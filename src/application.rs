@@ -28,6 +28,7 @@ use crate::blur;
 use crate::error::Error;
 use crate::event_loop::WakeupSender;
 use crate::settings::{LayerShellSettings, SurfaceId};
+use crate::shell::ShellRequests;
 use crate::state::WaylandState;
 use crate::surface_manager::{
     IcedSurface, PendingCreations, ScaleFactorFn, apply_blur_region, apply_layer_shell_command,
@@ -281,11 +282,16 @@ where
         vsync: true,
     };
 
+    // Created before the compositor, which clones it into its renderer.
+    let (ping, ping_source) =
+        calloop::ping::make_ping().map_err(|e| Error::EventLoop(e.to_string()))?;
+    let shell_requests = ShellRequests::new(ping.clone());
+
     let mut compositor = futures::executor::block_on(iced_renderer::Compositor::new(
         graphics_settings,
         window_handle.clone(),
         window_handle.clone(),
-        iced_graphics::Shell::headless(),
+        shell_requests.shell(),
     ))
     .map_err(Error::Graphics)?;
 
@@ -297,8 +303,6 @@ where
 
     let executor = iced_futures::backend::default::Executor::new()
         .map_err(|e| Error::EventLoop(e.to_string()))?;
-    let (ping, ping_source) =
-        calloop::ping::make_ping().map_err(|e| Error::EventLoop(e.to_string()))?;
     let (runtime_sender, mut runtime_receiver) = mpsc::unbounded::<Action<Message>>();
     let wakeup_sender = WakeupSender {
         inner: runtime_sender,
@@ -475,6 +479,27 @@ where
             &mut iced_surfaces,
             &surface_scales,
         );
+
+        // Apply the renderer's coalesced image-load requests on the loop thread.
+        let relayout = shell_requests.take_relayout();
+        let redraw = shell_requests.take_redraw();
+        if relayout {
+            let ids: Vec<SurfaceId> = user_interfaces.keys().copied().collect();
+            for id in ids {
+                let Some(iced_s) = iced_surfaces.get(&id) else {
+                    continue;
+                };
+                let bounds = iced_s.viewport.logical_size();
+                if let Some(ui) = user_interfaces.remove(&id) {
+                    user_interfaces.insert(id, ui.relayout(bounds, &mut renderer));
+                }
+            }
+        }
+        if relayout || redraw {
+            for iced_s in iced_surfaces.values_mut() {
+                iced_s.needs_redraw = true;
+            }
+        }
 
         let pending_events = mem::take(&mut wl_state.pending_events);
         surface_events.clear();
